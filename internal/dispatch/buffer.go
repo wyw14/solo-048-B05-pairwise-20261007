@@ -48,12 +48,17 @@ func (b *Buffer) Drain(stationID string, currentEpoch uint64) (ready, retired []
 		b.accepted[stationID] = currentEpoch
 	}
 	fence := b.accepted[stationID]
+	var pending []BufferedCommand
 	for _, command := range b.commands[stationID] {
-		if command.Epoch < fence {
+		switch {
+		case command.Epoch < fence:
 			retired = append(retired, command)
-			continue
+		case command.Epoch == fence:
+			ready = append(ready, command)
+		default:
+			// Future generation: not yet confirmed, keep buffered.
+			pending = append(pending, command)
 		}
-		ready = append(ready, command)
 	}
 	sort.Slice(ready, func(i, j int) bool {
 		if ready[i].Epoch == ready[j].Epoch {
@@ -61,7 +66,11 @@ func (b *Buffer) Drain(stationID string, currentEpoch uint64) (ready, retired []
 		}
 		return ready[i].Epoch < ready[j].Epoch
 	})
-	delete(b.commands, stationID)
+	if len(pending) > 0 {
+		b.commands[stationID] = pending
+	} else {
+		delete(b.commands, stationID)
+	}
 	return ready, retired
 }
 

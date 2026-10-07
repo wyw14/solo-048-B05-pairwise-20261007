@@ -14,6 +14,7 @@ type ReplayResult struct {
 	Epoch     uint64            `json:"epoch"`
 	Applied   []station.Command `json:"applied"`
 	Rejected  []station.Command `json:"rejected"`
+	Pending   []station.Command `json:"pending"`
 	At        time.Time         `json:"at"`
 }
 
@@ -52,10 +53,16 @@ func (r *Reconnector) Reconnect(stationID string, currentEpoch uint64) (ReplayRe
 		}
 		result.Applied = append(result.Applied, command)
 	}
+	for _, buffered := range r.buffer.Pending(stationID) {
+		result.Pending = append(result.Pending, station.Command{
+			ID: buffered.CommandID, StationID: buffered.StationID, Epoch: buffered.Epoch,
+			Sequence: buffered.Sequence, Celsius: buffered.Celsius, Status: "pending_future_epoch", At: buffered.QueuedAt,
+		})
+	}
 	if _, err := r.stations.SetOnline(stationID, true); err != nil {
 		return result, err
 	}
-	if err := r.audit.Accepted("recovery.reconnect", stationID, "recovery", "station replay reconciled", map[string]any{"epoch": currentEpoch, "applied": len(result.Applied), "rejected": len(result.Rejected)}); err != nil {
+	if err := r.audit.Accepted("recovery.reconnect", stationID, "recovery", "station replay reconciled", map[string]any{"epoch": currentEpoch, "applied": len(result.Applied), "rejected": len(result.Rejected), "pending": len(result.Pending)}); err != nil {
 		return result, err
 	}
 	return result, nil
