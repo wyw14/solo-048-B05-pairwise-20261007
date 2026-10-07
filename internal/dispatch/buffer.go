@@ -41,19 +41,25 @@ func (b *Buffer) AcceptEpoch(stationID string, epoch uint64) {
 	}
 }
 
-func (b *Buffer) Drain(stationID string, currentEpoch uint64) (ready, retired []BufferedCommand) {
+func (b *Buffer) Drain(stationID string, currentEpoch uint64) (ready, retired, pending []BufferedCommand) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if currentEpoch > b.accepted[stationID] {
 		b.accepted[stationID] = currentEpoch
 	}
 	fence := b.accepted[stationID]
+	var remaining []BufferedCommand
 	for _, command := range b.commands[stationID] {
-		if command.Epoch < fence {
+		switch {
+		case command.Epoch < fence:
 			retired = append(retired, command)
-			continue
+		case command.Epoch > fence:
+			// Future generation: not yet confirmed, keep buffered.
+			pending = append(pending, command)
+			remaining = append(remaining, command)
+		default:
+			ready = append(ready, command)
 		}
-		ready = append(ready, command)
 	}
 	sort.Slice(ready, func(i, j int) bool {
 		if ready[i].Epoch == ready[j].Epoch {
@@ -61,8 +67,12 @@ func (b *Buffer) Drain(stationID string, currentEpoch uint64) (ready, retired []
 		}
 		return ready[i].Epoch < ready[j].Epoch
 	})
-	delete(b.commands, stationID)
-	return ready, retired
+	if len(remaining) == 0 {
+		delete(b.commands, stationID)
+	} else {
+		b.commands[stationID] = remaining
+	}
+	return ready, retired, pending
 }
 
 func (b *Buffer) Pending(stationID string) []BufferedCommand {

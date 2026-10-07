@@ -14,6 +14,7 @@ type ReplayResult struct {
 	Epoch     uint64            `json:"epoch"`
 	Applied   []station.Command `json:"applied"`
 	Rejected  []station.Command `json:"rejected"`
+	Pending   []station.Command `json:"pending"`
 	At        time.Time         `json:"at"`
 }
 
@@ -33,12 +34,18 @@ func (r *Reconnector) Reconnect(stationID string, currentEpoch uint64) (ReplayRe
 		return ReplayResult{}, fmt.Errorf("station %s not found", stationID)
 	}
 	r.buffer.AcceptEpoch(stationID, currentEpoch)
-	ready, retired := r.buffer.Drain(stationID, currentEpoch)
+	ready, retired, pending := r.buffer.Drain(stationID, currentEpoch)
 	result := ReplayResult{StationID: stationID, Epoch: currentEpoch, At: time.Now().UTC()}
 	for _, buffered := range retired {
 		result.Rejected = append(result.Rejected, station.Command{
 			ID: buffered.CommandID, StationID: buffered.StationID, Epoch: buffered.Epoch,
 			Sequence: buffered.Sequence, Celsius: buffered.Celsius, Status: "rejected_old_epoch", At: buffered.QueuedAt,
+		})
+	}
+	for _, buffered := range pending {
+		result.Pending = append(result.Pending, station.Command{
+			ID: buffered.CommandID, StationID: buffered.StationID, Epoch: buffered.Epoch,
+			Sequence: buffered.Sequence, Celsius: buffered.Celsius, Status: "pending_future_epoch", At: buffered.QueuedAt,
 		})
 	}
 	for _, buffered := range ready {
@@ -55,7 +62,7 @@ func (r *Reconnector) Reconnect(stationID string, currentEpoch uint64) (ReplayRe
 	if _, err := r.stations.SetOnline(stationID, true); err != nil {
 		return result, err
 	}
-	if err := r.audit.Accepted("recovery.reconnect", stationID, "recovery", "station replay reconciled", map[string]any{"epoch": currentEpoch, "applied": len(result.Applied), "rejected": len(result.Rejected)}); err != nil {
+	if err := r.audit.Accepted("recovery.reconnect", stationID, "recovery", "station replay reconciled", map[string]any{"epoch": currentEpoch, "applied": len(result.Applied), "rejected": len(result.Rejected), "pending": len(result.Pending)}); err != nil {
 		return result, err
 	}
 	return result, nil
